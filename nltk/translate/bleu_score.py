@@ -541,11 +541,11 @@ class SmoothingFunction:
         >>> print(sentence_bleu([reference1], hypothesis1, smoothing_function=chencherry.method4)) # doctest: +ELLIPSIS
         0.4118...
         >>> print(sentence_bleu([reference1], hypothesis1, smoothing_function=chencherry.method5)) # doctest: +ELLIPSIS
-        0.4905...
+        0.4077...
         >>> print(sentence_bleu([reference1], hypothesis1, smoothing_function=chencherry.method6)) # doctest: +ELLIPSIS
         0.4135...
         >>> print(sentence_bleu([reference1], hypothesis1, smoothing_function=chencherry.method7)) # doctest: +ELLIPSIS
-        0.4905...
+        0.4077...
 
         :param epsilon: the epsilon value use in method 1
         :type epsilon: float
@@ -664,18 +664,38 @@ class SmoothingFunction:
     def method5(self, p_n, references, hypothesis, hyp_len=None, *args, **kwargs):
         """
         Smoothing method 5:
-        The matched counts for similar values of n should be similar. To a
+        The matched counts for similar values of n should be similar. To
         calculate the n-gram matched count, it averages the n−1, n and n+1 gram
-        matched counts.
+        matched counts (Chen and Cherry 2014). The n-gram total in the
+        denominator is left unchanged.
+
+        The virtual order-0 count is the order-1 matched count plus one, matching
+        the previous ``m[-1] = m_1 + 1`` convention, but applied to match counts
+        rather than to precisions.
         """
         hyp_len = hyp_len if hyp_len else len(hypothesis)
-        m = {}
-        # Requires an precision value for an addition ngram order.
-        p_n_plus1 = p_n + [modified_precision(references, hypothesis, 5)]
-        m[-1] = p_n[0] + 1
+        # One order past the weights in use, not a hardcoded 5-gram. sentence_bleu
+        # defaults to 4 weights, but corpus_bleu callers can pass fewer.
+        next_order = modified_precision(references, hypothesis, len(p_n) + 1)
+        precisions = list(p_n) + [next_order]
+
+        def matched_count(precision):
+            # modified_precision returns a Fraction. method4 (used by method7)
+            # may already have replaced a zero count with a float precision.
+            numerator = getattr(precision, "numerator", None)
+            if numerator is None:
+                return precision
+            return numerator
+
+        counts = [matched_count(precision) for precision in precisions]
+        smoothed_count = counts[0] + 1
         for i, p_i in enumerate(p_n):
-            p_n[i] = (m[i - 1] + p_i + p_n_plus1[i + 1]) / 3
-            m[i] = p_n[i]
+            smoothed_count = (smoothed_count + counts[i] + counts[i + 1]) / 3
+            denominator = getattr(p_i, "denominator", None)
+            if denominator is None or denominator == 0:
+                p_n[i] = smoothed_count
+            else:
+                p_n[i] = smoothed_count / denominator
         return p_n
 
     def method6(self, p_n, references, hypothesis, hyp_len=None, *args, **kwargs):
